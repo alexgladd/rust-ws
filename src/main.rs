@@ -1,10 +1,10 @@
 mod db;
 
+use crate::db::{run_db, Command, CommandResult};
 use anyhow::Result;
-use db::run_db;
 use std::env;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 use tracing_subscriber::prelude::*;
@@ -45,22 +45,84 @@ async fn main() -> Result<()> {
 
     info!("Setting up DB task...");
     let db_token = token.clone();
-    let (tx, mut rx) = mpsc::channel(1024);
+    let (tx1, rx) = mpsc::channel(1024);
+    let tx2 = tx1.clone();
 
     let db_task = tokio::spawn(async move { run_db(rx, db_token).await });
 
-    let t1 = tokio::spawn(async {
-        run_for(5).await;
+    let t1 = tokio::spawn(async move {
+        let secs: u64 = 5;
+        debug!(target: "T1", "Async sleeping for {} seconds", secs);
+        tokio::time::sleep(Duration::from_secs(secs)).await;
+        debug!(target: "T1", "Done async sleeping");
+
+        let (txres, rxres) = oneshot::channel();
+
+        match tx1
+            .send(Command::Set {
+                key: "foo".into(),
+                val: "foobar1234".into(),
+                resp: txres,
+            })
+            .await
+        {
+            Ok(_) => {}
+            Err(_) => error!(target: "T1", "Failed to send command!"),
+        };
+
+        match rxres.await {
+            Ok(res) => match res {
+                CommandResult::Ok { key, val: _ } => info!(target: "T1", "Set value for {}", key),
+                CommandResult::NotFound => {}
+                CommandResult::Err { msg } => {
+                    error!(target: "T1", "Error setting value: {}", msg)
+                }
+            },
+            Err(e) => error!(target: "T1", cause = %e, "Failed to receive command result!"),
+        };
+
+        info!(target: "T1", "Done.");
     });
 
-    let t2 = tokio::spawn(async {
-        run_for(10).await;
+    let t2 = tokio::spawn(async move {
+        let secs: u64 = 10;
+        debug!(target: "T2", "Async sleeping for {} seconds", secs);
+        tokio::time::sleep(Duration::from_secs(secs)).await;
+        debug!(target: "T2", "Done async sleeping");
+
+        let (txres, rxres) = oneshot::channel();
+
+        match tx2
+            .send(Command::Get {
+                key: "foo".into(),
+                resp: txres,
+            })
+            .await
+        {
+            Ok(_) => {}
+            Err(_) => error!(target: "T2", "Failed to send command!"),
+        };
+
+        match rxres.await {
+            Ok(res) => match res {
+                CommandResult::Ok { key, val } => {
+                    info!(target: "T2", "Got value for {}: {}", key, val)
+                }
+                CommandResult::NotFound => {}
+                CommandResult::Err { msg } => {
+                    error!(target: "T2", "Error setting value: {}", msg)
+                }
+            },
+            Err(e) => error!(target: "T2", cause = %e, "Failed to receive command result!"),
+        };
+
+        info!(target: "T2", "Done.");
     });
 
     info!("Running; shut down with CTRL-C (SIGINT)");
     match tokio::signal::ctrl_c().await {
         Ok(_) => {}
-        Err(e) => error!(%e, "Unable to listen for SIGINT; aborting"),
+        Err(e) => error!(cause = %e, "Unable to listen for SIGINT; aborting"),
     }
 
     token.cancel();
@@ -68,10 +130,4 @@ async fn main() -> Result<()> {
     info!("Done!");
 
     Ok(())
-}
-
-async fn run_for(secs: u64) {
-    debug!("Async sleeping for {} seconds", secs);
-    tokio::time::sleep(Duration::from_secs(secs)).await;
-    debug!("Done async sleeping");
 }
