@@ -1,6 +1,5 @@
 use std::{collections::HashMap, time::Duration};
 
-use anyhow::Result;
 use tokio::sync::{mpsc::Receiver, oneshot::Sender};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -34,7 +33,7 @@ pub(crate) struct Value {
 pub(crate) type Db = HashMap<String, String>;
 pub(crate) type Responder = Sender<CommandResult>;
 
-pub(crate) async fn run_db(mut rx: Receiver<Command>, token: CancellationToken) -> Result<()> {
+pub(crate) async fn run_db(mut rx: Receiver<Command>, token: CancellationToken) {
     let mut db = Db::new();
 
     let mut stop = false;
@@ -57,8 +56,6 @@ pub(crate) async fn run_db(mut rx: Receiver<Command>, token: CancellationToken) 
             }
         }
     }
-
-    Ok(())
 }
 
 async fn handle_command(c: Command, db: &mut Db) {
